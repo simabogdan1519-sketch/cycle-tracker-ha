@@ -1,0 +1,32 @@
+update_cycle:
+  name: Actualizează ciclul
+  description: Actualizează data de start a ciclului și parametrii.
+  fields:
+    entry_id:
+      name: Entry ID
+      description: ID-ul intrării de configurare
+      required: true
+      selector:
+        text:
+    cycle_start_date:
+      name: Data de start
+      description: Prima zi a ultimei menstruații (YYYY-MM-DD)
+      required: true
+      selector:
+        text:
+    cycle_length:
+      name: Durata ciclului
+      description: Numărul de zile (implicit 28)
+      required: false
+      selector:
+        number:
+          min: 21
+          max: 40
+    period_length:
+      name: Durata menstruației
+      description: Numărul de zile (implicit 5)
+      required: false
+      selector:
+        number:
+          min: 2
+          max: 10
