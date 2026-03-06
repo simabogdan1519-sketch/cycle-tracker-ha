@@ -1,0 +1,43 @@
+update_cycle:
+  name: Actualizează ciclul
+  description: >
+    Actualizează data de start a ciclului și parametrii. 
+    Toți senzorii se recalculează imediat.
+    Folosit din cardul HTML sau din automatizări.
+  fields:
+    entry_id:
+      name: Entry ID
+      description: ID-ul configurației (găsit în Settings → Integrations → Cycle Tracker → entry_id)
+      required: true
+      example: "abc123def456"
+      selector:
+        text:
+    cycle_start_date:
+      name: Prima zi a ciclului
+      description: Data primei zile a ultimei menstruații (format YYYY-MM-DD)
+      required: true
+      example: "2024-03-01"
+      selector:
+        date:
+    cycle_length:
+      name: Durata ciclului
+      description: Numărul de zile al unui ciclu complet (implicit 28)
+      required: false
+      example: 28
+      selector:
+        number:
+          min: 21
+          max: 40
+          step: 1
+          unit_of_measurement: zile
+    period_length:
+      name: Durata perioadei
+      description: Numărul de zile al menstruației (implicit 5)
+      required: false
+      example: 5
+      selector:
+        number:
+          min: 2
+          max: 10
+          step: 1
+          unit_of_measurement: zile
