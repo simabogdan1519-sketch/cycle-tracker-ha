@@ -1,0 +1,38 @@
+update_cycle:
+  name: Actualizează ciclul
+  description: Actualizează data de start a ciclului și parametrii.
+  fields:
+    entry_id:
+      name: Entry ID
+      description: ID-ul intrării de configurare (găsit în Settings → Integrations → Cycle Tracker → System Information)
+      required: true
+      example: "abc123def456"
+      selector:
+        text:
+    cycle_start_date:
+      name: Data de start
+      description: Prima zi a ultimei menstruații (format YYYY-MM-DD)
+      required: true
+      example: "2024-03-15"
+      selector:
+        text:
+    cycle_length:
+      name: Durata ciclului
+      description: Numărul de zile al ciclului (implicit 28)
+      required: false
+      example: 28
+      selector:
+        number:
+          min: 21
+          max: 40
+          unit_of_measurement: zile
+    period_length:
+      name: Durata menstruației
+      description: Numărul de zile al menstruației (implicit 5)
+      required: false
+      example: 5
+      selector:
+        number:
+          min: 2
+          max: 10
+          unit_of_measurement: zile
