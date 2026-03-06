@@ -1,9 +1,0 @@
-{
-  "name": "Cycle Tracker",
-  "content_in_root": false,
-  "render_readme": true,
-  "filename": "cycle_tracker.zip",
-  "country": ["RO", "US", "GB", "EU"],
-  "homeassistant": "2023.1.0",
-  "category": "integration"
-}
