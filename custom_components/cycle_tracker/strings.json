@@ -1,0 +1,41 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Cycle Tracker – Configurare",
+        "description": "Completează datele pentru a crea senzorii de monitorizare.",
+        "data": {
+          "name": "Numele utilizatorului (ex: Ana)",
+          "cycle_start_date": "Prima zi a ultimei menstruații (YYYY-MM-DD)",
+          "cycle_length": "Durata ciclului (zile)",
+          "period_length": "Durata menstruației (zile)",
+          "notify_device": "Dispozitiv notificări (ex: notify.mobile_app_telefon)",
+          "notify_period": "Notificare înainte de menstruație",
+          "notify_ovulation": "Notificare la ovulație",
+          "notify_daily": "Rezumat zilnic (08:00)"
+        }
+      }
+    },
+    "error": {
+      "invalid_date": "Data trebuie să fie în formatul YYYY-MM-DD (ex: 2024-03-15)"
+    },
+    "abort": {
+      "already_configured": "Acest utilizator este deja configurat."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Actualizează ciclul",
+        "data": {
+          "cycle_start_date": "Prima zi a ultimei menstruații (YYYY-MM-DD)",
+          "cycle_length": "Durata ciclului (zile)",
+          "period_length": "Durata menstruației (zile)",
+          "notify_period": "Notificare înainte de menstruație",
+          "notify_ovulation": "Notificare la ovulație",
+          "notify_daily": "Rezumat zilnic (08:00)"
+        }
+      }
+    }
+  }
+}
