@@ -168,38 +168,67 @@ class CycleTrackerCoordinator(DataUpdateCoordinator):
         try:
             start = date.fromisoformat(start_str)
         except ValueError:
+            _LOGGER.error("CycleTracker: dată invalidă '%s'", start_str)
             return {}
 
+        # Avanseaza la ciclul curent
         while (today - start).days >= cycle_len:
             start += timedelta(days=cycle_len)
 
-        cycle_day      = (today - start).days + 1
-        ovulation_day  = cycle_len - 14
+        cycle_day = (today - start).days + 1
+
+        # ── Ovulația ──────────────────────────────────────────────
+        # Faza luteală durează MEREU ~14 zile (fix hormonal).
+        # Faza foliculară variază în funcție de lungimea ciclului.
+        # Ovulația = cycle_length - 14 (numărat din ziua 1)
+        ovulation_day = cycle_len - 14  # ex: ciclu 28 → ziua 14, ciclu 30 → ziua 16
+
+        # ── Fereastra fertilă ──────────────────────────────────────
+        # Spermatozoizii supraviețuiesc 3-5 zile în tractul reproductiv.
+        # Ovulul supraviețuiește 12-24h după ovulație.
+        # Fereastră fertilă reală: ovulation_day-5 până la ovulation_day+1
+        fertile_start = ovulation_day - 5
+        fertile_end   = ovulation_day + 1
+
+        # ── Faze ──────────────────────────────────────────────────
+        if cycle_day <= period_len:
+            # Menstruație: ziua 1 până la sfârșitul sângerării
+            phase = PHASE_MENSTRUATIE
+        elif cycle_day < fertile_start:
+            # Foliculară: după menstruație, estradiolul crește, folicul se maturizează
+            phase = PHASE_FOLICULARA
+        elif cycle_day <= fertile_end:
+            # Ovulație / fereastră fertilă: vârf LH, eliberarea ovulului
+            phase = PHASE_OVULATIE
+        else:
+            # Luteală: corpul galben produce progesteron, ~14 zile fixe
+            phase = PHASE_LUTEALA
+
+        # ── Fertilitate ───────────────────────────────────────────
+        # Bazat pe probabilitatea de concepție pe zi (studii Wilcox et al.)
+        # Ziua -5: ~10%, -4: ~16%, -3: ~14%, -2: ~27%, -1: ~31%, 0: ~33%, +1: ~0%
+        diff = cycle_day - ovulation_day  # negativ = înainte, pozitiv = după
+        if diff in (-1, 0):
+            # Ziua ovulației și ziua dinainte: probabilitate maximă
+            fertility = FERTILITY_MAXIM
+        elif diff == -2:
+            # 2 zile înainte: probabilitate foarte înaltă
+            fertility = FERTILITY_FOARTE_INALT
+        elif diff in (-5, -4, -3):
+            # 3-5 zile înainte: fereastră fertilă activă
+            fertility = FERTILITY_INALT
+        elif diff in (-7, -6) or diff == 1:
+            # Margini ale ferestrei: fertilitate moderată
+            fertility = FERTILITY_MODERAT
+        else:
+            # Restul ciclului: fertilitate scăzută
+            fertility = FERTILITY_SCAZUT
+
+        # ── Date calendaristice ────────────────────────────────────
         days_until     = cycle_len - cycle_day
         next_period    = start + timedelta(days=cycle_len)
         ovulation_date = start + timedelta(days=ovulation_day - 1)
         progress       = round((cycle_day / cycle_len) * 100)
-
-        if cycle_day <= period_len:
-            phase = PHASE_MENSTRUATIE
-        elif cycle_day < ovulation_day - 3:
-            phase = PHASE_FOLICULARA
-        elif cycle_day <= ovulation_day + 2:
-            phase = PHASE_OVULATIE
-        else:
-            phase = PHASE_LUTEALA
-
-        diff_ov = abs(cycle_day - ovulation_day)
-        if diff_ov == 0:
-            fertility = FERTILITY_MAXIM
-        elif diff_ov == 1:
-            fertility = FERTILITY_FOARTE_INALT
-        elif diff_ov <= 3:
-            fertility = FERTILITY_INALT
-        elif diff_ov <= 5:
-            fertility = FERTILITY_MODERAT
-        else:
-            fertility = FERTILITY_SCAZUT
 
         return {
             "cycle_day":         cycle_day,
@@ -212,4 +241,6 @@ class CycleTrackerCoordinator(DataUpdateCoordinator):
             "cycle_length":      cycle_len,
             "period_length":     period_len,
             "ovulation_day":     ovulation_day,
+            "fertile_start_day": fertile_start,
+            "fertile_end_day":   fertile_end,
         }
