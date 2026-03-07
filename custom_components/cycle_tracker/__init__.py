@@ -177,54 +177,58 @@ class CycleTrackerCoordinator(DataUpdateCoordinator):
 
         cycle_day = (today - start).days + 1
 
-        # ── Ovulația ──────────────────────────────────────────────
-        # Faza luteală durează MEREU ~14 zile (fix hormonal).
-        # Faza foliculară variază în funcție de lungimea ciclului.
-        # Ovulația = cycle_length - 14 (numărat din ziua 1)
-        ovulation_day = cycle_len - 14  # ex: ciclu 28 → ziua 14, ciclu 30 → ziua 16
+        # ── Ovulația ──────────────────────────────────────────────────────────
+        # Sursă: ACOG, Johns Hopkins, Cleveland Clinic
+        # Ovulația apare cu ~14 zile ÎNAINTE de următoarea menstruație (fix hormonal).
+        # Faza luteală = mereu ~14 zile. Faza foliculară variază.
+        # Formula: ovulation_day = cycle_length - 14
+        ovulation_day = cycle_len - 14  # ziua 14 pt ciclu 28, ziua 16 pt ciclu 30 etc.
 
-        # ── Fereastra fertilă ──────────────────────────────────────
-        # Spermatozoizii supraviețuiesc 3-5 zile în tractul reproductiv.
-        # Ovulul supraviețuiește 12-24h după ovulație.
-        # Fereastră fertilă reală: ovulation_day-5 până la ovulation_day+1
+        # ── Fereastra fertilă ─────────────────────────────────────────────────
+        # Sursă: Johns Hopkins + studiu Wilcox et al. (BMJ 2000, 696 cicluri)
+        # Spermă supravietuieste 3-5 zile, ovul 12-24h dupa ovulatie
+        # Fereastra = 5 zile INAINTE + ziua ovulatiei + 1 zi dupa = 7 zile total
         fertile_start = ovulation_day - 5
         fertile_end   = ovulation_day + 1
 
-        # ── Faze ──────────────────────────────────────────────────
+        # ── Faze ──────────────────────────────────────────────────────────────
+        # Sursă: Cleveland Clinic, textbook OB/GYN
         if cycle_day <= period_len:
-            # Menstruație: ziua 1 până la sfârșitul sângerării
+            # Menstruație: sângerare, endometrul se elimină
             phase = PHASE_MENSTRUATIE
-        elif cycle_day < fertile_start:
-            # Foliculară: după menstruație, estradiolul crește, folicul se maturizează
+        elif cycle_day < ovulation_day - 1:
+            # Foliculară: FSH crește, folicul se maturizează, estrogen crește
+            # Durează de la sfârșitul menstruației până aproape de ovulație
             phase = PHASE_FOLICULARA
-        elif cycle_day <= fertile_end:
-            # Ovulație / fereastră fertilă: vârf LH, eliberarea ovulului
+        elif cycle_day <= ovulation_day:
+            # Ovulație: vârf LH (ziua -1), eliberare ovul (ziua 0)
+            # Marcăm 2 zile: ziua de vârf LH + ziua ovulației propriu-zise
             phase = PHASE_OVULATIE
         else:
-            # Luteală: corpul galben produce progesteron, ~14 zile fixe
+            # Luteală: corpul galben produce progesteron, durează fix ~14 zile
             phase = PHASE_LUTEALA
 
-        # ── Fertilitate ───────────────────────────────────────────
-        # Bazat pe probabilitatea de concepție pe zi (studii Wilcox et al.)
-        # Ziua -5: ~10%, -4: ~16%, -3: ~14%, -2: ~27%, -1: ~31%, 0: ~33%, +1: ~0%
-        diff = cycle_day - ovulation_day  # negativ = înainte, pozitiv = după
+        # ── Fertilitate (probabilitate de concepție) ──────────────────────────
+        # Sursă: Wilcox AJ et al., N Engl J Med 1995 + BMJ 2000
+        # Probabilitățile sunt relative la ziua ovulației (ziua 0)
+        diff = cycle_day - ovulation_day  # negativ = înainte de ovulație
         if diff in (-1, 0):
-            # Ziua ovulației și ziua dinainte: probabilitate maximă
+            # Ziua ovulației și ziua dinainte (vârf LH): ~31-33% probabilitate
             fertility = FERTILITY_MAXIM
         elif diff == -2:
-            # 2 zile înainte: probabilitate foarte înaltă
+            # 2 zile înainte: ~27% probabilitate
             fertility = FERTILITY_FOARTE_INALT
         elif diff in (-5, -4, -3):
-            # 3-5 zile înainte: fereastră fertilă activă
+            # 3-5 zile înainte: 10-16% probabilitate, fereastră fertilă activă
             fertility = FERTILITY_INALT
-        elif diff in (-7, -6) or diff == 1:
-            # Margini ale ferestrei: fertilitate moderată
+        elif diff == 1:
+            # 1 zi după ovulație: ovulul mai poate fi viabil câteva ore
             fertility = FERTILITY_MODERAT
         else:
-            # Restul ciclului: fertilitate scăzută
+            # Restul ciclului: fertilitate neglijabilă
             fertility = FERTILITY_SCAZUT
 
-        # ── Date calendaristice ────────────────────────────────────
+        # ── Date calendaristice ───────────────────────────────────────────────
         days_until     = cycle_len - cycle_day
         next_period    = start + timedelta(days=cycle_len)
         ovulation_date = start + timedelta(days=ovulation_day - 1)
