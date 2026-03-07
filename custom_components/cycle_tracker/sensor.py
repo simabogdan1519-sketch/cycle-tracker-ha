@@ -72,11 +72,21 @@ class CycleDaySensor(CycleBaseSensor):
 
 class CyclePhaseSensor(CycleBaseSensor):
     def __init__(self, coord, entry, prefix):
-        super().__init__(coord, entry, prefix, "phase", "Cycle Phase", "mdi:flower")
+        super().__init__(coord, entry, prefix, "cycle_phase", "Cycle Phase", "mdi:flower")
+    @property
+    def native_value(self):
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.get("phase")
 
 class FertilitySensor(CycleBaseSensor):
     def __init__(self, coord, entry, prefix):
-        super().__init__(coord, entry, prefix, "fertility", "Fertility Level", "mdi:egg")
+        super().__init__(coord, entry, prefix, "fertility_level", "Fertility Level", "mdi:egg")
+    @property
+    def native_value(self):
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.get("fertility")
 
 class DaysUntilPeriodSensor(CycleBaseSensor):
     def __init__(self, coord, entry, prefix):
