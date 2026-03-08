@@ -1,67 +1,43 @@
-"""Cycle Tracker – Config Flow."""
+"""Cycle Tracker – Config Flow v2.0"""
 from __future__ import annotations
 
 import voluptuous as vol
-from datetime import date
-
 from homeassistant import config_entries
 from homeassistant.core import callback
 
-from .const import (
-    DOMAIN,
-    CONF_NAME,
-    CONF_CYCLE_START,
-    CONF_CYCLE_LENGTH,
-    CONF_PERIOD_LENGTH,
-    DEFAULT_CYCLE_LENGTH,
-    DEFAULT_PERIOD_LENGTH,
-)
+from .const import DOMAIN
 
 
 class CycleTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Cycle Tracker."""
-
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(self, user_input=None):
         errors = {}
-
         if user_input is not None:
-            try:
-                date.fromisoformat(user_input[CONF_CYCLE_START])
-            except ValueError:
-                errors[CONF_CYCLE_START] = "invalid_date"
-
-            if not errors:
-                await self.async_set_unique_id(
-                    f"cycle_tracker_{user_input[CONF_NAME].lower().replace(' ', '_')}"
-                )
-                self._abort_if_unique_id_configured()
-                return self.async_create_entry(
-                    title=f"Cycle Tracker – {user_input[CONF_NAME]}",
-                    data=user_input,
-                )
+            return self.async_create_entry(
+                title=user_input["name"],
+                data={
+                    "name": user_input["name"],
+                    "cycle_start_date": user_input["cycle_start_date"],
+                    "cycle_length": user_input.get("cycle_length", 28),
+                    "period_length": user_input.get("period_length", 5),
+                    "cycle_history": [{
+                        "date": user_input["cycle_start_date"],
+                        "period_length": user_input.get("period_length", 5),
+                        "flow_intensity": "mediu",
+                        "source": "initial",
+                    }],
+                },
+            )
 
         schema = vol.Schema({
-            vol.Required(CONF_NAME, default="Ana"): str,
-            vol.Required(CONF_CYCLE_START, default=date.today().isoformat()): str,
-            vol.Optional(CONF_CYCLE_LENGTH, default=DEFAULT_CYCLE_LENGTH): vol.All(
-                vol.Coerce(int), vol.Range(min=21, max=40)
-            ),
-            vol.Optional(CONF_PERIOD_LENGTH, default=DEFAULT_PERIOD_LENGTH): vol.All(
-                vol.Coerce(int), vol.Range(min=2, max=10)
-            ),
-            vol.Optional("notify_device", default=""): str,
-            vol.Optional("notify_period", default=True): bool,
-            vol.Optional("notify_ovulation", default=True): bool,
-            vol.Optional("notify_daily", default=False): bool,
+            vol.Required("name"): str,
+            vol.Required("cycle_start_date"): str,
+            vol.Optional("cycle_length", default=28): vol.Coerce(int),
+            vol.Optional("period_length", default=5): vol.Coerce(int),
         })
 
-        return self.async_show_form(
-            step_id="user",
-            data_schema=schema,
-            errors=errors,
-        )
+        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
     @staticmethod
     @callback
@@ -70,31 +46,14 @@ class CycleTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class CycleTrackerOptionsFlow(config_entries.OptionsFlow):
-    """Handle options."""
-
-    def __init__(self, entry):
-        self._entry = entry
+    def __init__(self, config_entry):
+        self._config_entry = config_entry
 
     async def async_step_init(self, user_input=None):
         if user_input is not None:
-            self.hass.config_entries.async_update_entry(
-                self._entry,
-                data={**self._entry.data, **user_input},
-            )
             return self.async_create_entry(title="", data=user_input)
-
-        data = self._entry.data
         schema = vol.Schema({
-            vol.Required(CONF_CYCLE_START, default=data.get(CONF_CYCLE_START, date.today().isoformat())): str,
-            vol.Optional(CONF_CYCLE_LENGTH, default=data.get(CONF_CYCLE_LENGTH, DEFAULT_CYCLE_LENGTH)): vol.All(
-                vol.Coerce(int), vol.Range(min=21, max=40)
-            ),
-            vol.Optional(CONF_PERIOD_LENGTH, default=data.get(CONF_PERIOD_LENGTH, DEFAULT_PERIOD_LENGTH)): vol.All(
-                vol.Coerce(int), vol.Range(min=2, max=10)
-            ),
-            vol.Optional("notify_period", default=data.get("notify_period", True)): bool,
-            vol.Optional("notify_ovulation", default=data.get("notify_ovulation", True)): bool,
-            vol.Optional("notify_daily", default=data.get("notify_daily", False)): bool,
+            vol.Optional("cycle_length", default=self._config_entry.data.get("cycle_length", 28)): vol.Coerce(int),
+            vol.Optional("period_length", default=self._config_entry.data.get("period_length", 5)): vol.Coerce(int),
         })
-
         return self.async_show_form(step_id="init", data_schema=schema)
