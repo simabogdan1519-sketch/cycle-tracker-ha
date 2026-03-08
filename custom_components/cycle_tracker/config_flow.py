@@ -9,7 +9,7 @@ from .const import DOMAIN
 
 
 class CycleTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 2
+    VERSION = 1
 
     async def async_step_user(self, user_input=None):
         errors = {}
