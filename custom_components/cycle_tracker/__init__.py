@@ -42,6 +42,29 @@ SCHEMA_DELETE_CYCLE = vol.Schema({
 })
 
 
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrare automată v1 → v2 (adaugă cycle_history)."""
+    _LOGGER.info("Cycle Tracker: migrare de la versiunea %s", entry.version)
+
+    if entry.version == 1:
+        data = dict(entry.data)
+        if "cycle_history" not in data:
+            history = []
+            if "cycle_start_date" in data:
+                history.append({
+                    "date": data["cycle_start_date"],
+                    "period_length": data.get("period_length", 5),
+                    "flow_intensity": "mediu",
+                    "source": "migrated",
+                })
+            data["cycle_history"] = history
+
+        hass.config_entries.async_update_entry(entry, data=data, version=2)
+        _LOGGER.info("Cycle Tracker: migrare completă → v2")
+
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
 
