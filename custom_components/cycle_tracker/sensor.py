@@ -1,105 +1,89 @@
-"""Cycle Tracker – Sensors."""
+"""Cycle Tracker – Senzori v2.0"""
 from __future__ import annotations
+import json
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, CONF_NAME
+from .const import DOMAIN
 
 
 async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    coordinator = hass.data[DOMAIN][entry.entry_id]
-    name = entry.data.get(CONF_NAME, "user").lower().replace(" ", "_")
+    prefix = entry.data.get("name", "user").lower().replace(" ", "_")
+    sensors = [
+        CycleTrackerSensor(hass, entry, prefix, "cycle_day",          "Cycle Day",         "mdi:counter",          None),
+        CycleTrackerSensor(hass, entry, prefix, "cycle_phase",        "Cycle Phase",        "mdi:flower",           None),
+        CycleTrackerSensor(hass, entry, prefix, "fertility_level",    "Fertility Level",    "mdi:egg",              None),
+        CycleTrackerSensor(hass, entry, prefix, "days_until_period",  "Days Until Period",  "mdi:calendar-clock",   "d"),
+        CycleTrackerSensor(hass, entry, prefix, "next_period_date",   "Next Period Date",   "mdi:calendar-today",   None),
+        CycleTrackerSensor(hass, entry, prefix, "ovulation_date",     "Ovulation Date",     "mdi:calendar-star",    None),
+        CycleTrackerSensor(hass, entry, prefix, "cycle_progress",     "Cycle Progress",     "mdi:progress-clock",   "%"),
+        CycleTrackerSensor(hass, entry, prefix, "cycle_history",      "Cycle History",      "mdi:history",          None),
+    ]
+    async_add_entities(sensors, True)
 
-    async_add_entities([
-        CycleDaySensor(coordinator, entry, name),
-        CyclePhaseSensor(coordinator, entry, name),
-        FertilitySensor(coordinator, entry, name),
-        DaysUntilPeriodSensor(coordinator, entry, name),
-        NextPeriodSensor(coordinator, entry, name),
-        OvulationSensor(coordinator, entry, name),
-        CycleProgressSensor(coordinator, entry, name),
-    ])
 
-
-class CycleBaseSensor(CoordinatorEntity, SensorEntity):
-    def __init__(self, coordinator, entry, name_prefix, sensor_key, sensor_name, icon, unit=None):
-        super().__init__(coordinator)
-        self._entry      = entry
-        self._prefix     = name_prefix
+class CycleTrackerSensor(SensorEntity):
+    def __init__(self, hass, entry, prefix, sensor_key, friendly_name, icon, unit):
+        self._hass = hass
+        self._entry = entry
+        self._entry_id = entry.entry_id
+        self._prefix = prefix
         self._sensor_key = sensor_key
-        self._attr_name  = f"{name_prefix.capitalize()} {sensor_name}"
+        self._attr_name = f"{prefix.capitalize()} {friendly_name}"
         self._attr_unique_id = f"{entry.entry_id}_{sensor_key}"
-        self._attr_icon  = icon
-        if unit:
-            self._attr_native_unit_of_measurement = unit
-
-    @property
-    def native_value(self):
-        if not self.coordinator.data:
-            return None
-        return self.coordinator.data.get(self._sensor_key)
-
-    @property
-    def extra_state_attributes(self):
-        d = self.coordinator.data or {}
-        return {
-            "entry_id":      self._entry.entry_id,
-            "cycle_length":  d.get("cycle_length"),
-            "period_length": d.get("period_length"),
-            "ovulation_day": d.get("ovulation_day"),
-        }
+        self._attr_icon = icon
+        self._attr_native_unit_of_measurement = unit
+        self._attr_native_value = None
+        self._attr_extra_state_attributes = {}
 
     @property
     def entity_id(self):
         return f"sensor.{self._prefix}_{self._sensor_key}"
 
-    @entity_id.setter
-    def entity_id(self, value):
-        pass
+    async def async_update(self) -> None:
+        data = self._hass.data.get(DOMAIN, {}).get(self._entry_id, {})
+        if not data:
+            return
 
+        if self._sensor_key == "cycle_history":
+            history = data.get("cycle_history", [])
+            self._attr_native_value = len(history)
+            self._attr_extra_state_attributes = {
+                "history": json.dumps(history),
+                "avg_cycle_length": data.get("avg_cycle_length", 28),
+                "avg_period_length": data.get("avg_period_length", 5),
+                "is_irregular": data.get("is_irregular", False),
+                "trend": data.get("trend", "stable"),
+                "history_count": data.get("history_count", 0),
+            }
 
-class CycleDaySensor(CycleBaseSensor):
-    def __init__(self, coord, entry, prefix):
-        super().__init__(coord, entry, prefix, "cycle_day", "Cycle Day", "mdi:calendar-heart", "zile")
+        elif self._sensor_key == "cycle_day":
+            self._attr_native_value = data.get("cycle_day")
+            self._attr_extra_state_attributes = {
+                "cycle_length":  data.get("cycle_length", 28),
+                "period_length": data.get("period_length", 5),
+                "ovulation_day": data.get("ovulation_day", 14),
+            }
 
-class CyclePhaseSensor(CycleBaseSensor):
-    def __init__(self, coord, entry, prefix):
-        super().__init__(coord, entry, prefix, "cycle_phase", "Cycle Phase", "mdi:flower")
-    @property
-    def native_value(self):
-        if not self.coordinator.data:
-            return None
-        return self.coordinator.data.get("phase")
+        elif self._sensor_key == "cycle_phase":
+            self._attr_native_value = data.get("cycle_phase")
 
-class FertilitySensor(CycleBaseSensor):
-    def __init__(self, coord, entry, prefix):
-        super().__init__(coord, entry, prefix, "fertility_level", "Fertility Level", "mdi:egg")
-    @property
-    def native_value(self):
-        if not self.coordinator.data:
-            return None
-        return self.coordinator.data.get("fertility")
+        elif self._sensor_key == "fertility_level":
+            self._attr_native_value = data.get("fertility_level")
 
-class DaysUntilPeriodSensor(CycleBaseSensor):
-    def __init__(self, coord, entry, prefix):
-        super().__init__(coord, entry, prefix, "days_until_period", "Days Until Period", "mdi:calendar-clock", "zile")
+        elif self._sensor_key == "days_until_period":
+            self._attr_native_value = data.get("days_until_period")
 
-class NextPeriodSensor(CycleBaseSensor):
-    def __init__(self, coord, entry, prefix):
-        super().__init__(coord, entry, prefix, "next_period_date", "Next Period Date", "mdi:calendar-month")
+        elif self._sensor_key == "next_period_date":
+            self._attr_native_value = data.get("next_period_date")
 
-class OvulationSensor(CycleBaseSensor):
-    def __init__(self, coord, entry, prefix):
-        super().__init__(coord, entry, prefix, "ovulation_date", "Ovulation Date", "mdi:star-circle")
+        elif self._sensor_key == "ovulation_date":
+            self._attr_native_value = data.get("ovulation_date")
 
-class CycleProgressSensor(CycleBaseSensor):
-    def __init__(self, coord, entry, prefix):
-        super().__init__(coord, entry, prefix, "cycle_progress", "Cycle Progress", "mdi:progress-clock", "%")
+        elif self._sensor_key == "cycle_progress":
+            self._attr_native_value = data.get("cycle_progress")
