@@ -1,250 +1,308 @@
-"""Cycle Tracker – Home Assistant Integration."""
+"""Cycle Tracker – Home Assistant Custom Integration v2.0
+Suport complet pentru istoric cicluri (date, durată menstruație, flux).
+Surse medicale: Wilcox et al. BMJ 2000, Johns Hopkins, ACOG.
+"""
 from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
 
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
-import homeassistant.helpers.config_validation as cv
-import voluptuous as vol
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.entity_platform import async_get_platforms
 
-from .const import (
-    DOMAIN,
-    CONF_NAME,
-    CONF_CYCLE_START,
-    CONF_CYCLE_LENGTH,
-    CONF_PERIOD_LENGTH,
-    DEFAULT_CYCLE_LENGTH,
-    DEFAULT_PERIOD_LENGTH,
-    PHASE_MENSTRUATIE,
-    PHASE_FOLICULARA,
-    PHASE_OVULATIE,
-    PHASE_LUTEALA,
-    FERTILITY_SCAZUT,
-    FERTILITY_MODERAT,
-    FERTILITY_INALT,
-    FERTILITY_FOARTE_INALT,
-    FERTILITY_MAXIM,
-)
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
-
 PLATFORMS = ["sensor"]
 
-UPDATE_CYCLE_SCHEMA = vol.Schema({
+SERVICE_UPDATE_CYCLE  = "update_cycle"
+SERVICE_ADD_PAST_CYCLE = "add_past_cycle"
+SERVICE_DELETE_CYCLE  = "delete_cycle"
+
+SCHEMA_UPDATE_CYCLE = vol.Schema({
     vol.Required("entry_id"): cv.string,
     vol.Required("cycle_start_date"): cv.string,
-    vol.Optional("cycle_length", default=DEFAULT_CYCLE_LENGTH): vol.Coerce(int),
-    vol.Optional("period_length", default=DEFAULT_PERIOD_LENGTH): vol.Coerce(int),
+    vol.Optional("period_length", default=5): vol.Coerce(int),
+    vol.Optional("flow_intensity", default="mediu"): cv.string,
+})
+
+SCHEMA_ADD_PAST_CYCLE = vol.Schema({
+    vol.Required("entry_id"): cv.string,
+    vol.Required("date"): cv.string,
+    vol.Optional("period_length", default=5): vol.Coerce(int),
+    vol.Optional("flow_intensity", default="mediu"): cv.string,
+})
+
+SCHEMA_DELETE_CYCLE = vol.Schema({
+    vol.Required("entry_id"): cv.string,
+    vol.Required("date"): cv.string,
 })
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Cycle Tracker from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
-    coordinator = CycleTrackerCoordinator(hass, entry)
-    await coordinator.async_config_entry_first_refresh()
+    # Migrare v1 → v2: dacă nu există cycle_history, creează din date vechi
+    data = dict(entry.data)
+    if "cycle_history" not in data:
+        history = []
+        if "cycle_start_date" in data:
+            history.append({
+                "date": data["cycle_start_date"],
+                "period_length": data.get("period_length", 5),
+                "flow_intensity": "mediu",
+                "source": "migrated",
+            })
+        data["cycle_history"] = history
+        hass.config_entries.async_update_entry(entry, data=data)
 
-    hass.data[DOMAIN][entry.entry_id] = coordinator
-
+    hass.data[DOMAIN][entry.entry_id] = _calculate(entry.data)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    if not hass.services.has_service(DOMAIN, "update_cycle"):
-        async def handle_update_cycle(call: ServiceCall) -> None:
-            entry_id   = call.data["entry_id"]
-            start_date = call.data["cycle_start_date"]
-            c_len      = call.data.get("cycle_length", DEFAULT_CYCLE_LENGTH)
-            p_len      = call.data.get("period_length", DEFAULT_PERIOD_LENGTH)
-
-            coord = hass.data[DOMAIN].get(entry_id)
-            if not coord:
-                _LOGGER.error("CycleTracker: entry_id '%s' nu a fost găsit", entry_id)
-                return
-
-            hass.config_entries.async_update_entry(
-                coord.entry,
-                data={
-                    **coord.entry.data,
-                    CONF_CYCLE_START:  start_date,
-                    CONF_CYCLE_LENGTH: c_len,
-                    CONF_PERIOD_LENGTH: p_len,
-                },
-            )
-            await coord.async_request_refresh()
-
-        hass.services.async_register(
-            DOMAIN, "update_cycle", handle_update_cycle, schema=UPDATE_CYCLE_SCHEMA
-        )
-
-    _schedule_notifications(hass, entry, coordinator)
-    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+    _register_services(hass)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
+        hass.data[DOMAIN].pop(entry.entry_id, None)
     return unload_ok
 
 
-async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload entry when options change."""
-    await hass.config_entries.async_reload(entry.entry_id)
-
-
-def _schedule_notifications(hass, entry, coordinator):
-    from homeassistant.helpers.event import async_track_time_change
-
-    notify_device = entry.data.get("notify_device", "")
-    notify_period = entry.data.get("notify_period", True)
-    notify_ovul   = entry.data.get("notify_ovulation", True)
-    notify_daily  = entry.data.get("notify_daily", False)
-
-    if not notify_device:
+def _register_services(hass: HomeAssistant) -> None:
+    if hass.services.has_service(DOMAIN, SERVICE_UPDATE_CYCLE):
         return
 
-    async def daily_check(now):
-        data = coordinator.data
-        if not data:
+    async def handle_update_cycle(call: ServiceCall) -> None:
+        entry = hass.config_entries.async_get_entry(call.data["entry_id"])
+        if not entry:
             return
-        days_left = data.get("days_until_period", 99)
-        phase     = data.get("phase", "")
-
-        if notify_period and days_left == 3:
-            await hass.services.async_call("notify", notify_device, {
-                "title": "🌸 Cycle Tracker",
-                "message": "Pregătește-te! Menstruația vine în 3 zile.",
-            })
-        if notify_ovul and phase == PHASE_OVULATIE:
-            await hass.services.async_call("notify", notify_device, {
-                "title": "✨ Cycle Tracker",
-                "message": "Fertilitate maximă azi!",
-            })
-        if notify_daily:
-            phase_ro = {
-                PHASE_MENSTRUATIE: "Menstruație",
-                PHASE_FOLICULARA:  "Foliculară",
-                PHASE_OVULATIE:    "Ovulație",
-                PHASE_LUTEALA:     "Luteală",
-            }.get(phase, phase)
-            await hass.services.async_call("notify", notify_device, {
-                "title": "🌸 Cycle Tracker – Bună dimineața!",
-                "message": f"Faza: {phase_ro} · {days_left} zile până la menstruație.",
-            })
-
-    async_track_time_change(hass, daily_check, hour=8, minute=0, second=0)
-
-
-class CycleTrackerCoordinator(DataUpdateCoordinator):
-    """Calculates all cycle data and stores it."""
-
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
-        self.entry = entry
-        super().__init__(
-            hass,
-            _LOGGER,
-            name=DOMAIN,
-            update_interval=timedelta(hours=1),
-        )
-
-    async def _async_update_data(self):
-        return self._calculate(self.entry.data)
-
-    def _calculate(self, data: dict) -> dict:
-        today = date.today()
-
-        start_str  = data.get(CONF_CYCLE_START, "")
-        cycle_len  = int(data.get(CONF_CYCLE_LENGTH, DEFAULT_CYCLE_LENGTH))
-        period_len = int(data.get(CONF_PERIOD_LENGTH, DEFAULT_PERIOD_LENGTH))
-
-        if not start_str:
-            return {}
-
-        try:
-            start = date.fromisoformat(start_str)
-        except ValueError:
-            _LOGGER.error("CycleTracker: dată invalidă '%s'", start_str)
-            return {}
-
-        # Avanseaza la ciclul curent
-        while (today - start).days >= cycle_len:
-            start += timedelta(days=cycle_len)
-
-        cycle_day = (today - start).days + 1
-
-        # ── Ovulația ──────────────────────────────────────────────────────────
-        # Sursă: ACOG, Johns Hopkins, Cleveland Clinic
-        # Ovulația apare cu ~14 zile ÎNAINTE de următoarea menstruație (fix hormonal).
-        # Faza luteală = mereu ~14 zile. Faza foliculară variază.
-        # Formula: ovulation_day = cycle_length - 14
-        ovulation_day = cycle_len - 14  # ziua 14 pt ciclu 28, ziua 16 pt ciclu 30 etc.
-
-        # ── Fereastra fertilă ─────────────────────────────────────────────────
-        # Sursă: Johns Hopkins + studiu Wilcox et al. (BMJ 2000, 696 cicluri)
-        # Spermă supravietuieste 3-5 zile, ovul 12-24h dupa ovulatie
-        # Fereastra = 5 zile INAINTE + ziua ovulatiei + 1 zi dupa = 7 zile total
-        fertile_start = ovulation_day - 5
-        fertile_end   = ovulation_day + 1
-
-        # ── Faze ──────────────────────────────────────────────────────────────
-        # Sursă: Cleveland Clinic, textbook OB/GYN
-        if cycle_day <= period_len:
-            # Menstruație: sângerare, endometrul se elimină
-            phase = PHASE_MENSTRUATIE
-        elif cycle_day < ovulation_day - 1:
-            # Foliculară: FSH crește, folicul se maturizează, estrogen crește
-            # Durează de la sfârșitul menstruației până aproape de ovulație
-            phase = PHASE_FOLICULARA
-        elif cycle_day <= ovulation_day:
-            # Ovulație: vârf LH (ziua -1), eliberare ovul (ziua 0)
-            # Marcăm 2 zile: ziua de vârf LH + ziua ovulației propriu-zise
-            phase = PHASE_OVULATIE
-        else:
-            # Luteală: corpul galben produce progesteron, durează fix ~14 zile
-            phase = PHASE_LUTEALA
-
-        # ── Fertilitate (probabilitate de concepție) ──────────────────────────
-        # Sursă: Wilcox AJ et al., N Engl J Med 1995 + BMJ 2000
-        # Probabilitățile sunt relative la ziua ovulației (ziua 0)
-        diff = cycle_day - ovulation_day  # negativ = înainte de ovulație
-        if diff in (-1, 0):
-            # Ziua ovulației și ziua dinainte (vârf LH): ~31-33% probabilitate
-            fertility = FERTILITY_MAXIM
-        elif diff == -2:
-            # 2 zile înainte: ~27% probabilitate
-            fertility = FERTILITY_FOARTE_INALT
-        elif diff in (-5, -4, -3):
-            # 3-5 zile înainte: 10-16% probabilitate, fereastră fertilă activă
-            fertility = FERTILITY_INALT
-        elif diff == 1:
-            # 1 zi după ovulație: ovulul mai poate fi viabil câteva ore
-            fertility = FERTILITY_MODERAT
-        else:
-            # Restul ciclului: fertilitate neglijabilă
-            fertility = FERTILITY_SCAZUT
-
-        # ── Date calendaristice ───────────────────────────────────────────────
-        days_until     = cycle_len - cycle_day
-        next_period    = start + timedelta(days=cycle_len)
-        ovulation_date = start + timedelta(days=ovulation_day - 1)
-        progress       = round((cycle_day / cycle_len) * 100)
-
-        return {
-            "cycle_day":         cycle_day,
-            "phase":             phase,
-            "fertility":         fertility,
-            "days_until_period": days_until,
-            "next_period_date":  next_period.isoformat(),
-            "ovulation_date":    ovulation_date.isoformat(),
-            "cycle_progress":    progress,
-            "cycle_length":      cycle_len,
-            "period_length":     period_len,
-            "ovulation_day":     ovulation_day,
-            "fertile_start_day": fertile_start,
-            "fertile_end_day":   fertile_end,
+        history = list(entry.data.get("cycle_history", []))
+        new_date = call.data["cycle_start_date"]
+        new_entry = {
+            "date": new_date,
+            "period_length": call.data.get("period_length", 5),
+            "flow_intensity": call.data.get("flow_intensity", "mediu"),
+            "source": "current",
         }
+        idx = next((i for i, x in enumerate(history) if x["date"] == new_date), None)
+        if idx is not None:
+            history[idx] = new_entry
+        else:
+            history.append(new_entry)
+
+        new_data = {
+            **entry.data,
+            "cycle_start_date": new_date,
+            "cycle_length": _smart_cycle_length(history),
+            "period_length": call.data.get("period_length", 5),
+            "cycle_history": history,
+        }
+        hass.config_entries.async_update_entry(entry, data=new_data)
+        hass.data[DOMAIN][entry.entry_id] = _calculate(new_data)
+        await _refresh_sensors(hass, entry.entry_id)
+
+    async def handle_add_past_cycle(call: ServiceCall) -> None:
+        entry = hass.config_entries.async_get_entry(call.data["entry_id"])
+        if not entry:
+            return
+        history = list(entry.data.get("cycle_history", []))
+        new_date = call.data["date"]
+        if any(x["date"] == new_date for x in history):
+            _LOGGER.warning("Cycle Tracker: data %s există deja în istoric", new_date)
+            return
+        history.append({
+            "date": new_date,
+            "period_length": call.data.get("period_length", 5),
+            "flow_intensity": call.data.get("flow_intensity", "mediu"),
+            "source": "past",
+        })
+        new_data = {
+            **entry.data,
+            "cycle_length": _smart_cycle_length(history),
+            "cycle_history": history,
+        }
+        hass.config_entries.async_update_entry(entry, data=new_data)
+        hass.data[DOMAIN][entry.entry_id] = _calculate(new_data)
+        await _refresh_sensors(hass, entry.entry_id)
+
+    async def handle_delete_cycle(call: ServiceCall) -> None:
+        entry = hass.config_entries.async_get_entry(call.data["entry_id"])
+        if not entry:
+            return
+        history = [x for x in entry.data.get("cycle_history", []) if x["date"] != call.data["date"]]
+        new_data = {
+            **entry.data,
+            "cycle_length": _smart_cycle_length(history) if len(history) >= 2 else entry.data.get("cycle_length", 28),
+            "cycle_history": history,
+        }
+        hass.config_entries.async_update_entry(entry, data=new_data)
+        hass.data[DOMAIN][entry.entry_id] = _calculate(new_data)
+        await _refresh_sensors(hass, entry.entry_id)
+
+    hass.services.async_register(DOMAIN, SERVICE_UPDATE_CYCLE,   handle_update_cycle,   schema=SCHEMA_UPDATE_CYCLE)
+    hass.services.async_register(DOMAIN, SERVICE_ADD_PAST_CYCLE, handle_add_past_cycle, schema=SCHEMA_ADD_PAST_CYCLE)
+    hass.services.async_register(DOMAIN, SERVICE_DELETE_CYCLE,   handle_delete_cycle,   schema=SCHEMA_DELETE_CYCLE)
+
+
+async def _refresh_sensors(hass: HomeAssistant, entry_id: str) -> None:
+    for platform in async_get_platforms(hass, DOMAIN):
+        for entity in platform.entities.values():
+            if hasattr(entity, "_entry_id") and entity._entry_id == entry_id:
+                entity.async_schedule_update_ha_state(True)
+
+
+# ── Logică medicală ────────────────────────────────────────────────────────
+
+def _smart_cycle_length(history: list) -> int:
+    """Durata medie din istoric. Default 28 dacă date insuficiente."""
+    if len(history) < 2:
+        return 28
+    sorted_h = sorted(history, key=lambda x: x["date"])
+    lengths = []
+    for i in range(1, len(sorted_h)):
+        try:
+            d1 = datetime.strptime(sorted_h[i-1]["date"], "%Y-%m-%d").date()
+            d2 = datetime.strptime(sorted_h[i]["date"], "%Y-%m-%d").date()
+            diff = (d2 - d1).days
+            if 15 <= diff <= 50:
+                lengths.append(diff)
+        except ValueError:
+            continue
+    return round(sum(lengths) / len(lengths)) if lengths else 28
+
+
+def _calculate(data: dict) -> dict:
+    today = date.today()
+    history = data.get("cycle_history", [])
+
+    # Cycle length din istoric sau config
+    cycle_length = _smart_cycle_length(history) if len(history) >= 2 else data.get("cycle_length", 28)
+
+    # Cel mai recent ciclu = point de start
+    if history:
+        sorted_h = sorted(history, key=lambda x: x["date"], reverse=True)
+        latest = sorted_h[0]
+        try:
+            cycle_start = datetime.strptime(latest["date"], "%Y-%m-%d").date()
+        except ValueError:
+            cycle_start = today
+        period_length = latest.get("period_length", data.get("period_length", 5))
+    else:
+        try:
+            cycle_start = datetime.strptime(data.get("cycle_start_date", str(today)), "%Y-%m-%d").date()
+        except ValueError:
+            cycle_start = today
+        period_length = data.get("period_length", 5)
+
+    ovulation_day = cycle_length - 14
+
+    days_elapsed = max((today - cycle_start).days, 0)
+    cycle_day = (days_elapsed % cycle_length) + 1
+
+    # Faza (Johns Hopkins / ACOG)
+    if cycle_day <= period_length:
+        phase = "menstruatie"
+    elif cycle_day < ovulation_day - 1:
+        phase = "foliculara"
+    elif cycle_day in (ovulation_day - 1, ovulation_day):
+        phase = "ovulatie"
+    else:
+        phase = "luteala"
+
+    # Fertilitate (Wilcox N Engl J Med 1995)
+    rel = cycle_day - ovulation_day
+    if rel in (-1, 0):
+        fertility = "maxim"
+    elif rel == -2:
+        fertility = "foarte_inalt"
+    elif -5 <= rel <= -3:
+        fertility = "inalt"
+    elif rel == 1:
+        fertility = "moderat"
+    else:
+        fertility = "scazut"
+
+    days_until_period = cycle_length - (days_elapsed % cycle_length)
+    if days_until_period == cycle_length:
+        days_until_period = 0
+    next_period = today + timedelta(days=days_until_period)
+
+    cycles_passed = days_elapsed // cycle_length
+    ovulation_date = cycle_start + timedelta(days=cycles_passed * cycle_length + ovulation_day - 1)
+    if ovulation_date < today:
+        ovulation_date = cycle_start + timedelta(days=(cycles_passed + 1) * cycle_length + ovulation_day - 1)
+
+    progress = round((cycle_day / cycle_length) * 100)
+
+    # Statistici istoric
+    stats = _calc_history_stats(history)
+
+    return {
+        "cycle_day": cycle_day,
+        "cycle_phase": phase,
+        "fertility_level": fertility,
+        "days_until_period": days_until_period,
+        "next_period_date": str(next_period),
+        "ovulation_date": str(ovulation_date),
+        "cycle_progress": progress,
+        "cycle_length": cycle_length,
+        "period_length": period_length,
+        "ovulation_day": ovulation_day,
+        "cycle_history": history,
+        **stats,
+    }
+
+
+def _calc_history_stats(history: list) -> dict:
+    if len(history) < 2:
+        return {
+            "history_count": len(history),
+            "avg_cycle_length": 28,
+            "avg_period_length": 5,
+            "is_irregular": False,
+            "trend": "insufficient_data",
+        }
+    sorted_h = sorted(history, key=lambda x: x["date"])
+    lengths = []
+    for i in range(1, len(sorted_h)):
+        try:
+            d1 = datetime.strptime(sorted_h[i-1]["date"], "%Y-%m-%d").date()
+            d2 = datetime.strptime(sorted_h[i]["date"], "%Y-%m-%d").date()
+            diff = (d2 - d1).days
+            if 15 <= diff <= 50:
+                lengths.append(diff)
+        except ValueError:
+            continue
+
+    avg_len = round(sum(lengths) / len(lengths)) if lengths else 28
+
+    is_irregular = False
+    if len(lengths) >= 2:
+        mean = sum(lengths) / len(lengths)
+        std = (sum((x - mean) ** 2 for x in lengths) / len(lengths)) ** 0.5
+        is_irregular = std > 4
+
+    trend = "stable"
+    if len(lengths) >= 4:
+        half = len(lengths) // 2
+        a1 = sum(lengths[:half]) / half
+        a2 = sum(lengths[-half:]) / half
+        if a2 - a1 > 2:
+            trend = "longer"
+        elif a1 - a2 > 2:
+            trend = "shorter"
+
+    p_lens = [x.get("period_length", 5) for x in history if x.get("period_length")]
+    avg_period = round(sum(p_lens) / len(p_lens)) if p_lens else 5
+
+    return {
+        "history_count": len(history),
+        "avg_cycle_length": avg_len,
+        "avg_period_length": avg_period,
+        "is_irregular": is_irregular,
+        "trend": trend,
+    }
